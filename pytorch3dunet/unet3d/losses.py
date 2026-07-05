@@ -256,6 +256,10 @@ class WCEDiceLoss(nn.Module):
         self.softmax = nn.Softmax(dim=1)
 
     def forward(self, input, target):
+        # squeeze channel dim if label has shape [B, 1, D, H, W]
+        if target.dim() == 5 and target.shape[1] == 1:
+            target = target.squeeze(1)
+
         wce_loss = self.wce(input, target)
 
         num_classes = input.shape[1]
@@ -267,7 +271,11 @@ class WCEDiceLoss(nn.Module):
         per_channel_dice = compute_per_channel_dice(prob, target_onehot)
         dice_loss = 1.0 - torch.mean(per_channel_dice)
 
-        return self.alpha * wce_loss + (1.0 - self.alpha) * dice_loss
+        loss = self.alpha * wce_loss + (1.0 - self.alpha) * dice_loss
+        if torch.isnan(loss):
+            logger.warning(f"WCEDiceLoss NaN: wce={wce_loss.item():.4f} dice={dice_loss.item():.4f}")
+            return dice_loss  # fallback to Dice only
+        return loss
 
 
 class WeightedSmoothL1Loss(nn.SmoothL1Loss):
