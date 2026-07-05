@@ -1,0 +1,23 @@
+.idea
+.pytest_cache
+.ipynb_checkpoints
+
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Tensorboard logs
+logs/
+
+# PyTorch models
+*.pytorch
+
+# Python packages
+pytorch3dunet.egg-info/
+dist/
+
+# Dataset files — do not commit
+resources/dataset/
+resources/dataset_folds/
+*.h5
