@@ -214,7 +214,7 @@ class WeightedCrossEntropyLoss(nn.Module):
 
     def forward(self, input, target):
         weight = self._class_weights(input, target)
-        return F.cross_entropy(input, target, weight=weight, ignore_index=self.ignore_index)
+        return F.cross_entropy(input, target.long(), weight=weight, ignore_index=self.ignore_index)
 
     @staticmethod
     def _class_weights(input, target):
