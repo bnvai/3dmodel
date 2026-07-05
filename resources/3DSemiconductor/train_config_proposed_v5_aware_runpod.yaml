@@ -1,0 +1,125 @@
+# V5 RunPod — ResidualAttentionUNet3D + HybridMambaBottleneck
+# Stage 3: ClassAware patch sampling to fix chip/solder class bottleneck
+#
+# Changes vs V4:
+#   - SliceBuilder: FilterSliceBuilder → ClassAwareSliceBuilder
+#     * rare_classes=[4,5] (chip, solder) always included
+#     * rare_target_ratio=0.4 → 40% of patches contain chip/solder
+#   - LR: 2e-5 → 1e-5 (more conservative fine-tuning)
+#   - WCEDiceLoss alpha: 0.4 → 0.3 (less WCE disruption)
+#
+# Run:
+#   cd /workspace/pytorch-3dunet
+#   python -m pytorch3dunet.train --config resources/3DSemiconductor/train_config_proposed_v5_aware_runpod.yaml
+
+model:
+  name: ResidualAttentionUNet3D
+  in_channels: 1
+  out_channels: 6
+  layer_order: cge
+  f_maps: [ 64, 128, 256, 512 ]
+  num_groups: 8
+  final_sigmoid: false
+  is_segmentation: true
+  dropout_prob: 0.2
+  bottleneck_type: mamba
+
+trainer:
+  checkpoint_dir: /workspace/checkpoints_proposed_v5_aware
+  resume: /workspace/checkpoints_proposed_v3_runpod/best_checkpoint.pytorch
+  pre_trained: null
+  validate_after_iters: 1000
+  log_after_iters: 500
+  max_num_epochs: 300
+  max_num_iterations: 200000
+  eval_score_higher_is_better: true
+  early_stopping_patience: 30
+  max_val_images: 20
+
+loss:
+  name: WCEDiceLoss
+  alpha: 0.3
+
+optimizer:
+  learning_rate: 0.00001
+  weight_decay: 0.0001
+
+eval_metric:
+  name: MeanIoU
+  skip_background: true
+
+lr_scheduler:
+  name: ReduceLROnPlateau
+  mode: max
+  factor: 0.5
+  patience: 10
+
+loaders:
+  dataset: LazyHDF5Dataset
+  batch_size: 1
+  num_workers: 4
+  raw_internal_path: image
+  label_internal_path: label
+  global_normalization: false
+
+  train:
+    file_paths:
+      - /workspace/dataset/train
+
+    slice_builder:
+      name: ClassAwareSliceBuilder
+      patch_shape: [ 80, 170, 170 ]
+      stride_shape: [ 20, 20, 20 ]
+      rare_classes: [ 4, 5 ]
+      rare_target_ratio: 0.4
+      threshold: 0.01
+      slack_acceptance: 0.01
+
+    transformer:
+      raw:
+        - name: Standardize
+        - name: RandomFlip
+        - name: RandomRotate90
+        - name: RandomRotate
+          axes: [ [ 2, 1 ] ]
+          angle_spectrum: 30
+          mode: reflect
+        - name: ElasticDeformation
+          spline_order: 3
+        - name: AdditiveGaussianNoise
+          execution_probability: 0.3
+        - name: ToTensor
+          expand_dims: true
+      label:
+        - name: RandomFlip
+        - name: RandomRotate90
+        - name: RandomRotate
+          axes: [ [ 2, 1 ] ]
+          angle_spectrum: 30
+          mode: reflect
+        - name: ElasticDeformation
+          spline_order: 0
+        - name: ToTensor
+          expand_dims: false
+          dtype: int64
+
+  val:
+    file_paths:
+      - /workspace/dataset/val
+
+    slice_builder:
+      name: FilterSliceBuilder
+      patch_shape: [ 80, 170, 170 ]
+      stride_shape: [ 80, 170, 170 ]
+      threshold: 0.01
+      slack_acceptance: 0.01
+
+    transformer:
+      raw:
+        - name: Standardize
+        - name: ToTensor
+          expand_dims: true
+      label:
+        - name: ToTensor
+          expand_dims: false
+          dtype: int64

@@ -350,6 +350,86 @@ class FilterSliceBuilder(SliceBuilder):
         self._label_slices = list(label_slices)
 
 
+class ClassAwareSliceBuilder(SliceBuilder):
+    """SliceBuilder that oversamples patches containing rare/small classes.
+
+    All patches with any voxel belonging to a rare class are kept.
+    Common patches are randomly downsampled so that rare patches make up
+    `rare_target_ratio` of the final set.  Common patches still pass the
+    same threshold / slack_acceptance filter as FilterSliceBuilder.
+
+    Args:
+        rare_classes: class indices to oversample (e.g. [4, 5] for chip/solder)
+        rare_target_ratio: target fraction of final patches that contain a rare class
+        threshold: min ratio of foreground voxels for a common patch to be kept
+        slack_acceptance: random keep probability for common patches below threshold
+        lazy_loader: if False, load label volume into RAM for faster init
+    """
+
+    def __init__(
+        self,
+        raw_dataset: h5py.Dataset,
+        label_dataset: h5py.Dataset,
+        patch_shape: tuple[int, int, int],
+        stride_shape: tuple[int, int, int],
+        rare_classes: tuple[int, ...] = (4, 5),
+        rare_target_ratio: float = 0.4,
+        ignore_index: int | None = None,
+        threshold: float = 0.01,
+        slack_acceptance: float = 0.01,
+        lazy_loader: bool = False,
+        **kwargs,
+    ):
+        super().__init__(raw_dataset, label_dataset, patch_shape, stride_shape, **kwargs)
+
+        if label_dataset is None:
+            return
+
+        label_data = label_dataset[()] if not lazy_loader else label_dataset
+
+        rand_state = np.random.RandomState(47)
+        rare_patches: list[tuple] = []
+        common_patches: list[tuple] = []
+
+        for raw_idx, label_idx in zip(self._raw_slices, self._label_slices):
+            patch = label_data[label_idx]
+            if ignore_index is not None:
+                patch = np.where(patch == ignore_index, 0, patch)
+
+            if any(np.any(patch == c) for c in rare_classes):
+                rare_patches.append((raw_idx, label_idx))
+            else:
+                fg_ratio = np.count_nonzero(patch != 0) / patch.size
+                if fg_ratio > threshold or rand_state.rand() < slack_acceptance:
+                    common_patches.append((raw_idx, label_idx))
+
+        n_rare = len(rare_patches)
+        logger.info(f"ClassAwareSliceBuilder: {n_rare} rare, {len(common_patches)} common patches")
+
+        if n_rare == 0:
+            logger.warning("ClassAwareSliceBuilder: no rare-class patches found, keeping all common patches")
+            all_patches = common_patches
+        else:
+            n_common_target = int(n_rare * (1 - rare_target_ratio) / rare_target_ratio)
+            n_common_target = min(n_common_target, len(common_patches))
+            if n_common_target < len(common_patches):
+                chosen_idx = rand_state.choice(len(common_patches), n_common_target, replace=False)
+                chosen_common = [common_patches[i] for i in chosen_idx]
+            else:
+                chosen_common = common_patches
+            all_patches = rare_patches + chosen_common
+            rand_state.shuffle(all_patches)
+
+        logger.info(
+            f"ClassAwareSliceBuilder: {n_rare}/{len(all_patches)} rare "
+            f"({100 * n_rare / max(1, len(all_patches)):.1f}%) — total {len(all_patches)} patches"
+        )
+
+        raw_slices, label_slices = zip(*all_patches)
+        self._raw_slices = list(raw_slices)
+        self._label_slices = list(label_slices)
+
+
 def _loader_classes(class_name):
     modules = ["pytorch3dunet.datasets.hdf5", "pytorch3dunet.datasets.dsb", "pytorch3dunet.datasets.utils"]
     return get_class(class_name, modules)
