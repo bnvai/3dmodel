@@ -267,7 +267,11 @@ class WCEDiceLoss(nn.Module):
         target_onehot = target_onehot.permute(0, 4, 1, 2, 3).to(dtype=prob.dtype)
 
         per_channel_dice = compute_per_channel_dice(prob, target_onehot)
-        dice_loss = 1.0 - torch.mean(per_channel_dice)
+        # Weight each class's Dice by inverse frequency — rare classes (chip, solder)
+        # get higher gradient instead of being diluted by easy background/base_cu.
+        class_weights = WeightedCrossEntropyLoss._class_weights(input, target)  # float32
+        w = (class_weights / class_weights.sum()).to(dtype=per_channel_dice.dtype)
+        dice_loss = 1.0 - (per_channel_dice * w).sum()
 
         loss = self.alpha * wce_loss + (1.0 - self.alpha) * dice_loss
         if torch.isnan(loss):
