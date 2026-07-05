@@ -212,40 +212,25 @@ class WeightedCrossEntropyLoss(nn.Module):
         super().__init__()
         self.ignore_index = ignore_index
 
-    _debug_count = 0
-
     def forward(self, input, target):
         weight = self._class_weights(input, target)
-        t = target.long()
-        result = F.cross_entropy(input, t, weight=weight, ignore_index=self.ignore_index)
-        if torch.isnan(result) and WeightedCrossEntropyLoss._debug_count < 3:
-            WeightedCrossEntropyLoss._debug_count += 1
-            uvals = t.unique().tolist()
-            logger.warning(
-                f"WCE NaN debug#{WeightedCrossEntropyLoss._debug_count}: "
-                f"input=[{input.min():.3f},{input.max():.3f}] nan={torch.isnan(input).any().item()} "
-                f"target_unique={uvals} weight={[round(w,3) for w in weight.tolist()]} "
-                f"nan_w={torch.isnan(weight).any().item()} ignore_idx={self.ignore_index}"
-            )
-        return result
+        return F.cross_entropy(input, target.long(), weight=weight, ignore_index=self.ignore_index)
 
     @staticmethod
     def _class_weights(input, target):
         n_classes = input.shape[1]
         target_flat = target.view(-1).long().clamp(min=0)
-        counts = torch.zeros(n_classes, device=input.device, dtype=input.dtype)
+        # use float32 regardless of input dtype: patch size (e.g. 2.3M voxels) overflows float16
+        counts = torch.zeros(n_classes, device=input.device, dtype=torch.float32)
         for c in range(n_classes):
-            counts[c] = (target_flat == c).float().sum()
+            counts[c] = (target_flat == c).sum()
         total = counts.sum().clamp(min=1.0)
-        # present classes: inverse frequency; absent classes: weight=1 (neutral)
         weights = torch.where(
             counts > 0,
             (total - counts) / counts.clamp(min=1.0),
-            torch.ones(n_classes, device=input.device, dtype=input.dtype),
+            torch.ones(n_classes, device=input.device, dtype=torch.float32),
         )
-        # clamp min=0.1 so dominant class always has non-zero weight
-        # (avoids NaN when F.cross_entropy normalises by sum of per-pixel weights)
-        return weights.clamp(min=0.1, max=100.0).detach()
+        return weights.clamp(min=0.1, max=100.0).to(dtype=input.dtype).detach()
 
 
 class WCEDiceLoss(nn.Module):
