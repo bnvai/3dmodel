@@ -375,7 +375,7 @@ def _create_loss(name, loss_config, weight, ignore_index, pos_weight):
     elif name == "WCEDiceLoss":
         alpha = loss_config.get("alpha", 0.5)
         if ignore_index is None:
-            ignore_index = -100
+            ignore_index = -1  # match WeightedCrossEntropyLoss default; target has -1 for unlabeled voxels
         return WCEDiceLoss(alpha=alpha, ignore_index=ignore_index)
     elif name == "GeneralizedDiceLoss":
         normalization = loss_config.get("normalization", "sigmoid")
