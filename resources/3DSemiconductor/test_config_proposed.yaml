@@ -1,0 +1,52 @@
+# Inference configuration — ResidualAttentionUNet3D
+# 6-class semantic segmentation of power chip assemblies in SAM volumes.
+#
+# Class map:
+#   0: background
+#   1: base_cu   (copper base / lead frame)
+#   2: circuit   (circuit traces / wiring layer)
+#   3: base_chip (chip substrate / die attach)
+#   4: chip      (chip body / die)
+#   5: solder    (solder joints / balls)
+
+model_path: D:\Working\10. AI-Workspace\model\pytorch-3dunet\resources\3DSemiconductor\checkpoints_proposed\best_checkpoint.pytorch
+
+model:
+  name: ResidualAttentionUNet3D
+  in_channels: 1
+  out_channels: 6
+  layer_order: cge
+  f_maps: [ 64, 128, 256, 512 ]
+  num_groups: 8
+  final_sigmoid: false
+  is_segmentation: true
+
+predictor:
+  name: StandardPredictor
+  save_segmentation: true
+  performance_metric: mean_iou
+  gt_internal_path: label
+
+loaders:
+  dataset: LazyHDF5Dataset
+  batch_size: 1
+  num_workers: 0
+  raw_internal_path: image
+  label_internal_path: label
+  global_normalization: false
+
+  test:
+    file_paths:
+      - D:\Working\10. AI-Workspace\model\pytorch-3dunet\resources\dataset\val
+
+    slice_builder:
+      name: SliceBuilder
+      patch_shape: [ 80, 170, 170 ]
+      stride_shape: [ 40, 85, 85 ]     # 50% overlap for smoother boundaries
+      halo_shape:   [ 8,  16,  16 ]    # remove padding artifacts at patch edges
+
+    transformer:
+      raw:
+        - name: Standardize
+        - name: ToTensor
+          expand_dims: true

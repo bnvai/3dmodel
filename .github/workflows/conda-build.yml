@@ -1,0 +1,33 @@
+name: Conda Build
+
+on:
+  push:
+    branches:
+      - 'master'
+
+  pull_request:
+    branches: [master]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, windows-latest, ubuntu-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v4
+    - uses: conda-incubator/setup-miniconda@v3
+      with:
+        miniforge-version: latest
+        auto-update-conda: true
+        auto-activate-base: true
+        activate-environment: ""
+        conda-remove-defaults: "true"
+    - shell: bash -l {0}
+      run: conda info --envs
+    - name: Build pytorch-3dunet
+      shell: bash -l {0}
+      run: |
+        conda install -q conda-build conda=25.7.0
+        conda build -c conda-forge conda-recipe

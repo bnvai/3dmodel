@@ -1,0 +1,137 @@
+# V3 — ResidualAttentionUNet3D, medium-scale capacity + HybridMambaBottleneck
+#
+# Improvements over CE v2 (f_maps=[32,64,128,256], 7.31M, best IoU=0.8259):
+#   1. f_maps=[48,96,192,384] → 16.44M params
+#      CE v2 train-val gap was only -0.025 (no overfitting) → safe to scale up
+#   2. bottleneck_type=mamba → HybridMambaBottleneck (dual-path fusion) at bottleneck
+#      Architecture: Branch A (ResNetBlockSE) + Branch B (projected input) → fusion 1x1 conv + skip
+#      Note: mamba-ssm is NOT installable on Windows (requires Linux CUDA extensions).
+#      In fallback mode, Branch B = identity (projected input only, no SSM).
+#      The dual-path fusion + outer skip is still a richer bottleneck than pure scSE.
+#      To enable actual Mamba SSM: train on Linux/WSL with pip install mamba-ssm.
+#   3. dropout_prob=0.25 → CE v2 used 0.3; gap was negative (-0.025) meaning training
+#      is slightly harder than val (dropout active only at train). 0.25 is still safe.
+#
+# Training strategy (Stage 1 of 2):
+#   Train from scratch with CrossEntropyLoss (class-weighted).
+#   When val IoU plateaus (LR drops twice or early_stop), resume with
+#   train_config_proposed_v3_wce.yaml (Stage 2: WCEDiceLoss fine-tuning).
+#
+# Class map (6 classes):
+#   0: background  (89.0%)   weight: 0.10
+#   1: base_cu     ( 0.38%)  weight: 1.49
+#   2: circuit     ( 0.94%)  weight: 0.94
+#   3: base_chip   ( 2.39%)  weight: 0.59
+#   4: chip        ( 0.13%)  weight: 2.54
+#   5: solder      ( 7.17%)  weight: 0.34
+# Weights = sqrt(1/freq), normalized so sum=6.
+
+model:
+  name: ResidualAttentionUNet3D
+  in_channels: 1
+  out_channels: 6
+  layer_order: cge
+  f_maps: [ 48, 96, 192, 384 ]
+  num_groups: 8
+  final_sigmoid: false
+  is_segmentation: true
+  dropout_prob: 0.25
+  bottleneck_type: mamba
+
+trainer:
+  checkpoint_dir: D:\Working\10. AI-Workspace\model\pytorch-3dunet\resources\3DSemiconductor\checkpoints_proposed_v3
+  resume: null
+  pre_trained: null
+  validate_after_iters: 1000
+  log_after_iters: 500
+  max_num_epochs: 200
+  max_num_iterations: 100000
+  eval_score_higher_is_better: true
+  early_stopping_patience: 20
+  max_val_images: 20
+
+loss:
+  name: CrossEntropyLoss
+  weight: [ 0.10, 1.49, 0.94, 0.59, 2.54, 0.34 ]
+
+optimizer:
+  learning_rate: 0.0001
+  weight_decay: 0.00001
+
+eval_metric:
+  name: MeanIoU
+  skip_background: true
+
+lr_scheduler:
+  name: ReduceLROnPlateau
+  mode: max
+  factor: 0.5
+  patience: 8
+
+loaders:
+  dataset: LazyHDF5Dataset
+  batch_size: 1
+  num_workers: 4
+  raw_internal_path: image
+  label_internal_path: label
+  random_scale: 10
+  random_scale_probability: 0.1
+  global_normalization: false
+
+  train:
+    file_paths:
+      - D:\Working\10. AI-Workspace\model\pytorch-3dunet\resources\dataset\train
+
+    slice_builder:
+      name: FilterSliceBuilder
+      patch_shape: [ 80, 170, 170 ]
+      stride_shape: [ 20, 20, 20 ]
+      threshold: 0.01
+      slack_acceptance: 0.01
+
+    transformer:
+      raw:
+        - name: Standardize
+        - name: RandomFlip
+        - name: RandomRotate90
+        - name: RandomRotate
+          axes: [ [ 2, 1 ] ]
+          angle_spectrum: 30
+          mode: reflect
+        - name: ElasticDeformation
+          spline_order: 3
+        - name: ToTensor
+          expand_dims: true
+      label:
+        - name: RandomFlip
+        - name: RandomRotate90
+        - name: RandomRotate
+          axes: [ [ 2, 1 ] ]
+          angle_spectrum: 30
+          mode: reflect
+        - name: ElasticDeformation
+          spline_order: 0
+        - name: ToTensor
+          expand_dims: false
+          dtype: int64
+
+  val:
+    file_paths:
+      - D:\Working\10. AI-Workspace\model\pytorch-3dunet\resources\dataset\val
+
+    slice_builder:
+      name: FilterSliceBuilder
+      patch_shape: [ 80, 170, 170 ]
+      stride_shape: [ 80, 170, 170 ]
+      threshold: 0.01
+      slack_acceptance: 0.01
+
+    transformer:
+      raw:
+        - name: Standardize
+        - name: ToTensor
+          expand_dims: true
+      label:
+        - name: ToTensor
+          expand_dims: false
+          dtype: int64

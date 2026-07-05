@@ -1,0 +1,59 @@
+# Test / inference configuration for the proposed Attention-Enhanced 3D Residual U-Net
+# (ResidualAttentionUNet3D)
+#
+# Run after training completes and best_checkpoint.pytorch is written to checkpoints_proposed/.
+# Produces per-voxel argmax segmentation maps saved alongside the input HDF5 files.
+
+# path to the best checkpoint saved by the trainer
+model_path: D:\Working\10. AI-Workspace\model\pytorch-3dunet\resources\3DSemiconductor\checkpoints_proposed\best_checkpoint.pytorch
+
+# model configuration — must match train_config_proposed.yaml exactly
+model:
+  name: ResidualAttentionUNet3D
+  in_channels: 1
+  out_channels: 5
+  layer_order: cge
+  f_maps: [ 64, 128, 256, 512, 1024 ]
+  num_groups: 8
+  final_sigmoid: false
+  is_segmentation: true
+
+# predictor configuration
+predictor:
+  name: 'StandardPredictor'
+  # save argmax segmentation mask (not raw probability maps)
+  save_segmentation: true
+  # report mean IoU against ground-truth labels during inference
+  performance_metric: mean_iou
+  # internal path to ground-truth labels in HDF5 (used for metric computation)
+  gt_internal_path: label
+
+# data loaders configuration
+loaders:
+  dataset: LazyHDF5Dataset
+  batch_size: 1
+  # set num_workers: 0 for safer inference (avoids multiprocessing issues)
+  num_workers: 0
+  # must match the HDF5 key used during training
+  raw_internal_path: image
+  global_normalization: false
+
+  test:
+    file_paths:
+      - D:\Working\10. AI-Workspace\model\pytorch-3dunet\resources\3DSemiconductor\test
+
+    slice_builder:
+      # StandardSliceBuilder: no foreground filtering at test time
+      name: SliceBuilder
+      # same patch size as training for consistent receptive field
+      patch_shape: [ 80, 170, 170 ]
+      # 50% overlap between patches for smoother boundary predictions
+      # (reduces stitching artifacts at patch boundaries)
+      stride_shape: [ 40, 85, 85 ]
+
+    transformer:
+      raw:
+        # z-score normalization only — no augmentation at test time
+        - name: Standardize
+        - name: ToTensor
+          expand_dims: true

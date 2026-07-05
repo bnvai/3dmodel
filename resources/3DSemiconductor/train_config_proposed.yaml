@@ -1,0 +1,136 @@
+# Training configuration — ResidualAttentionUNet3D
+# 6-class semantic segmentation of power chip assemblies in SAM volumes.
+#
+# Class map:
+#   0: background
+#   1: base_cu   (copper base / lead frame)
+#   2: circuit   (circuit traces / wiring layer)
+#   3: base_chip (chip substrate / die attach)
+#   4: chip      (chip body / die)
+#   5: solder    (solder joints / balls)
+#
+# WCEDiceLoss: WCE weights are computed dynamically per-batch from the
+# predicted softmax distribution — no manual class_weights needed.
+# Dice handles small-structure imbalance (solder, circuit) by design.
+
+model:
+  name: ResidualAttentionUNet3D
+  in_channels: 1
+  out_channels: 6
+  layer_order: cge
+  f_maps: [ 64, 128, 256, 512 ]
+  num_groups: 8
+  final_sigmoid: false
+  is_segmentation: true
+  dropout_prob: 0.2
+
+trainer:
+  checkpoint_dir: D:\Working\10. AI-Workspace\model\pytorch-3dunet\resources\3DSemiconductor\checkpoints_proposed
+  resume: D:\Working\10. AI-Workspace\model\pytorch-3dunet\resources\3DSemiconductor\checkpoints_proposed\last_checkpoint.pytorch
+  pre_trained: null
+  validate_after_iters: 500
+  log_after_iters: 100
+  max_num_epochs: 200
+  max_num_iterations: 100000
+  eval_score_higher_is_better: true
+  early_stopping_patience: 20
+  max_val_images: 20
+
+  # Post-training evaluation — runs automatically when training ends.
+  # Requires: run predict.py first → *_predictions.h5 files in pred_dir.
+  # Remove this block entirely to disable (no-op, backwards compatible).
+  evaluation:
+    pred_dir:         D:\Working\10. AI-Workspace\model\pytorch-3dunet\resources\dataset\val_predictions
+    gt_dir:           D:\Working\10. AI-Workspace\model\pytorch-3dunet\resources\dataset\val
+    num_classes:      6
+    output_dir:       D:\Working\10. AI-Workspace\model\pytorch-3dunet\resources\3DSemiconductor\eval_results
+    class_names:      [ background, base_cu, circuit, base_chip, chip, solder ]
+    gt_dataset:       label
+    pred_dataset:     predictions
+    num_qual_volumes: 3
+
+loss:
+  name: WCEDiceLoss
+  alpha: 0.4
+
+optimizer:
+  learning_rate: 0.00005
+  weight_decay: 0.00001
+
+eval_metric:
+  name: MeanIoU
+  skip_background: true   # report IoU over classes 1..5 only
+
+lr_scheduler:
+  name: ReduceLROnPlateau
+  mode: max
+  factor: 0.5
+  patience: 5
+
+loaders:
+  dataset: LazyHDF5Dataset
+  batch_size: 1
+  num_workers: 4
+  raw_internal_path: image
+  label_internal_path: label
+  global_normalization: false
+
+  train:
+    file_paths:
+      - D:\Working\10. AI-Workspace\model\pytorch-3dunet\resources\dataset\train
+
+    slice_builder:
+      name: FilterSliceBuilder
+      patch_shape: [ 80, 170, 170 ]
+      stride_shape: [ 20, 40, 40 ]
+      # threshold: fraction of non-background voxels a patch must contain.
+      # Keep low so solder/circuit patches (sparse) are not discarded.
+      threshold: 0.01
+      slack_acceptance: 0.01
+
+    transformer:
+      raw:
+        - name: Standardize
+        - name: RandomFlip
+        - name: RandomRotate90
+        - name: RandomRotate
+          axes: [ [ 2, 1 ] ]
+          angle_spectrum: 15
+          mode: reflect
+        - name: ElasticDeformation
+          spline_order: 3
+        - name: ToTensor
+          expand_dims: true
+      label:
+        - name: RandomFlip
+        - name: RandomRotate90
+        - name: RandomRotate
+          axes: [ [ 2, 1 ] ]
+          angle_spectrum: 15
+          mode: reflect
+        - name: ElasticDeformation
+          spline_order: 0
+        - name: ToTensor
+          expand_dims: false
+          dtype: int64
+
+  val:
+    file_paths:
+      - D:\Working\10. AI-Workspace\model\pytorch-3dunet\resources\dataset\val
+
+    slice_builder:
+      name: FilterSliceBuilder
+      patch_shape: [ 80, 170, 170 ]
+      stride_shape: [ 80, 170, 170 ]   # non-overlapping for fast validation
+      threshold: 0.01
+      slack_acceptance: 0.01
+
+    transformer:
+      raw:
+        - name: Standardize
+        - name: ToTensor
+          expand_dims: true
+      label:
+        - name: ToTensor
+          expand_dims: false
+          dtype: int64

@@ -1,0 +1,124 @@
+# V3 RunPod — ResidualAttentionUNet3D + HybridMambaBottleneck (Mamba SSM ENABLED)
+#
+# Differences from Windows config (train_config_proposed_v3.yaml):
+#   - Paths: /workspace/ instead of D:\Working\...
+#   - f_maps=[64,128,256,512] → 29.23M params (RTX 4090 24GB can handle it)
+#   - batch_size=1 kept (safe), patch_shape unchanged
+#   - mamba-ssm is properly installed on Linux → SSM fully active
+#
+# Upload to RunPod:
+#   scp -P <PORT> train_config_proposed_v3_runpod.yaml root@<HOST>:/workspace/
+#
+# Run:
+#   cd /workspace/pytorch-3dunet
+#   python -m pytorch3dunet.train --config /workspace/train_config_proposed_v3_runpod.yaml
+
+model:
+  name: ResidualAttentionUNet3D
+  in_channels: 1
+  out_channels: 6
+  layer_order: cge
+  f_maps: [ 64, 128, 256, 512 ]
+  num_groups: 8
+  final_sigmoid: false
+  is_segmentation: true
+  dropout_prob: 0.2
+  bottleneck_type: mamba
+
+trainer:
+  checkpoint_dir: /workspace/checkpoints_proposed_v3
+  resume: null
+  pre_trained: null
+  validate_after_iters: 1000
+  log_after_iters: 500
+  max_num_epochs: 200
+  max_num_iterations: 100000
+  eval_score_higher_is_better: true
+  early_stopping_patience: 20
+  max_val_images: 20
+
+loss:
+  name: CrossEntropyLoss
+  weight: [ 0.10, 1.49, 0.94, 0.59, 2.54, 0.34 ]
+
+optimizer:
+  learning_rate: 0.0001
+  weight_decay: 0.00001
+
+eval_metric:
+  name: MeanIoU
+  skip_background: true
+
+lr_scheduler:
+  name: ReduceLROnPlateau
+  mode: max
+  factor: 0.5
+  patience: 8
+
+loaders:
+  dataset: LazyHDF5Dataset
+  batch_size: 1
+  num_workers: 4
+  raw_internal_path: image
+  label_internal_path: label
+  random_scale: 10
+  random_scale_probability: 0.1
+  global_normalization: false
+
+  train:
+    file_paths:
+      - /workspace/dataset/train
+
+    slice_builder:
+      name: FilterSliceBuilder
+      patch_shape: [ 80, 170, 170 ]
+      stride_shape: [ 20, 20, 20 ]
+      threshold: 0.01
+      slack_acceptance: 0.01
+
+    transformer:
+      raw:
+        - name: Standardize
+        - name: RandomFlip
+        - name: RandomRotate90
+        - name: RandomRotate
+          axes: [ [ 2, 1 ] ]
+          angle_spectrum: 30
+          mode: reflect
+        - name: ElasticDeformation
+          spline_order: 3
+        - name: ToTensor
+          expand_dims: true
+      label:
+        - name: RandomFlip
+        - name: RandomRotate90
+        - name: RandomRotate
+          axes: [ [ 2, 1 ] ]
+          angle_spectrum: 30
+          mode: reflect
+        - name: ElasticDeformation
+          spline_order: 0
+        - name: ToTensor
+          expand_dims: false
+          dtype: int64
+
+  val:
+    file_paths:
+      - /workspace/dataset/val
+
+    slice_builder:
+      name: FilterSliceBuilder
+      patch_shape: [ 80, 170, 170 ]
+      stride_shape: [ 80, 170, 170 ]
+      threshold: 0.01
+      slack_acceptance: 0.01
+
+    transformer:
+      raw:
+        - name: Standardize
+        - name: ToTensor
+          expand_dims: true
+      label:
+        - name: ToTensor
+          expand_dims: false
+          dtype: int64

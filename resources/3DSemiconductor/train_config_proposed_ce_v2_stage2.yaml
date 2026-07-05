@@ -1,0 +1,120 @@
+# Stage 2 fine-tuning — CE v2 best checkpoint → WCEDiceLoss
+#
+# Two-stage training strategy (valid for paper):
+#   Stage 1: CrossEntropyLoss (class-weighted) until LR plateau
+#            → train_config_proposed_ce.yaml, best IoU = 0.8185 @ step 65000
+#   Stage 2: WCEDiceLoss to directly optimize Dice/IoU overlap (this file)
+#            → resume from best_checkpoint, lower LR for fine-tuning
+#
+# Architecture: unchanged from Stage 1 (f_maps=[32,64,128,256], 7.31M params)
+#   → weights are fully compatible, resume is valid
+#
+# WCEDiceLoss: alpha=0.4 → 40% WCE + 60% SoftDice
+#   WCE handles class imbalance dynamically; Dice aligns training with IoU metric.
+
+model:
+  name: ResidualAttentionUNet3D
+  in_channels: 1
+  out_channels: 6
+  layer_order: cge
+  f_maps: [ 32, 64, 128, 256 ]
+  num_groups: 8
+  final_sigmoid: false
+  is_segmentation: true
+  dropout_prob: 0.3
+
+trainer:
+  checkpoint_dir: D:\Working\10. AI-Workspace\model\pytorch-3dunet\resources\3DSemiconductor\checkpoints_proposed_ce_v2_stage2
+  resume: D:\Working\10. AI-Workspace\model\pytorch-3dunet\resources\3DSemiconductor\checkpoints_proposed_ce_v2\best_checkpoint.pytorch
+  pre_trained: null
+  validate_after_iters: 1000
+  log_after_iters: 500
+  max_num_epochs: 200
+  max_num_iterations: 150000
+  eval_score_higher_is_better: true
+  early_stopping_patience: 15
+  max_val_images: 20
+
+loss:
+  name: WCEDiceLoss
+  alpha: 0.4
+
+optimizer:
+  learning_rate: 0.00002
+  weight_decay: 0.00001
+
+eval_metric:
+  name: MeanIoU
+  skip_background: true
+
+lr_scheduler:
+  name: ReduceLROnPlateau
+  mode: max
+  factor: 0.5
+  patience: 5
+
+loaders:
+  dataset: LazyHDF5Dataset
+  batch_size: 1
+  num_workers: 2
+  raw_internal_path: image
+  label_internal_path: label
+  global_normalization: false
+
+  train:
+    file_paths:
+      - D:\Working\10. AI-Workspace\model\pytorch-3dunet\resources\dataset\train
+
+    slice_builder:
+      name: FilterSliceBuilder
+      patch_shape: [ 80, 170, 170 ]
+      stride_shape: [ 20, 20, 20 ]
+      threshold: 0.01
+      slack_acceptance: 0.01
+
+    transformer:
+      raw:
+        - name: Standardize
+        - name: RandomFlip
+        - name: RandomRotate90
+        - name: RandomRotate
+          axes: [ [ 2, 1 ] ]
+          angle_spectrum: 30
+          mode: reflect
+        - name: ElasticDeformation
+          spline_order: 3
+        - name: ToTensor
+          expand_dims: true
+      label:
+        - name: RandomFlip
+        - name: RandomRotate90
+        - name: RandomRotate
+          axes: [ [ 2, 1 ] ]
+          angle_spectrum: 30
+          mode: reflect
+        - name: ElasticDeformation
+          spline_order: 0
+        - name: ToTensor
+          expand_dims: false
+          dtype: int64
+
+  val:
+    file_paths:
+      - D:\Working\10. AI-Workspace\model\pytorch-3dunet\resources\dataset\val
+
+    slice_builder:
+      name: FilterSliceBuilder
+      patch_shape: [ 80, 170, 170 ]
+      stride_shape: [ 80, 170, 170 ]
+      threshold: 0.01
+      slack_acceptance: 0.01
+
+    transformer:
+      raw:
+        - name: Standardize
+        - name: ToTensor
+          expand_dims: true
+      label:
+        - name: ToTensor
+          expand_dims: false
+          dtype: int64

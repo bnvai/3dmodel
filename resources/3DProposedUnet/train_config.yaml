@@ -1,0 +1,142 @@
+# Training configuration for the proposed Attention-Enhanced 3D Residual U-Net
+# (ResidualAttentionUNet3D) — paper: "Attention-Enhanced 3D Residual U-Net for
+# Multi-Class Semantic Segmentation of Power Chip Structures in SAM Volumes"
+#
+# Architecture: ResNetBlockSE (scSE, Roy et al. 2019) encoder + decoder
+#               with additive attention gates on every skip connection (Oktay et al. 2018)
+#               5 levels  |  f_maps: 64→128→256→512→1024
+#               layer_order: cge (Conv + GroupNorm + ELU)
+#               Upsampling: transposed convolution (deconv)
+#               Skip join: element-wise summation (not concatenation)
+#
+# NOTE: Boundary-aware composite loss (Dice + CE + λ_s·Surface) is the target
+#       per the paper. CrossEntropyLoss is used here as the initial training
+#       baseline until the custom composite loss is implemented.
+#
+# GPU memory: this model has ~118M parameters (f_maps=[64,128,256,512,1024]).
+#             Reduce patch_shape or f_maps if OOM occurs.
+
+# model configuration
+model:
+  name: ResidualAttentionUNet3D
+  # number of input channels (single-channel SAM amplitude volume)
+  in_channels: 1
+  # 5 semantic classes: background(0), wiring(1), base chip(2), chip body(3), solder joints(4)
+  out_channels: 5
+  # Conv + GroupNorm + ELU + Dropout — patch[128] keeps VRAM at ~4.7GB (safe)
+  layer_order: cged
+  dropout_prob: 0.15
+  # 4 levels matching baseline depth — proposed contribution is scSE + attention gates, not extra depth
+  f_maps: [ 32, 64, 128, 256 ]
+  # number of groups in GroupNorm (8 groups)
+  num_groups: 8
+  # use Softmax (not Sigmoid) for multi-class output
+  final_sigmoid: false
+  is_segmentation: true
+
+# trainer configuration
+trainer:
+  checkpoint_dir: D:\Working\10. AI-Workspace\model\pytorch-3dunet\resources\3DSemiconductor\checkpoints_proposed
+  resume: D:\Working\10. AI-Workspace\model\pytorch-3dunet\resources\3DSemiconductor\checkpoints_proposed\last_checkpoint.pytorch
+  pre_trained: null
+  validate_after_iters: 1000
+  log_after_iters: 500
+  max_num_epochs: 200
+  max_num_iterations: 100000
+  eval_score_higher_is_better: True
+  early_stopping_patience: 20
+
+# loss function configuration
+loss:
+  name: WCEDiceLoss
+  alpha: 0.5
+
+# optimizer configuration
+optimizer:
+  learning_rate: 0.0002
+  weight_decay: 0.0001
+
+# evaluation metric
+eval_metric:
+  name: MeanIoU
+
+# learning rate scheduler
+lr_scheduler:
+  name: ReduceLROnPlateau
+  mode: max
+  # reduce LR by factor 0.2 when val MeanIoU does not improve
+  factor: 0.2
+  patience: 8
+
+# data loaders configuration
+loaders:
+  dataset: LazyHDF5Dataset
+  batch_size: 1
+  num_workers: 4
+  # HDF5 internal paths (must match the keys used when building the HDF5 files)
+  raw_internal_path: image
+  label_internal_path: label
+  # random z-axis scaling augmentation (±10 px) — simulates SAM depth variability
+  random_scale: 10
+  random_scale_probability: 0.1
+  global_normalization: false
+
+  train:
+    file_paths:
+      - D:\Working\10. AI-Workspace\model\pytorch-3dunet\resources\dataset\train
+
+    slice_builder:
+      name: FilterSliceBuilder
+      patch_shape: [ 80, 170, 170 ]
+      stride_shape: [ 20, 20, 20 ]
+      threshold: 0.05
+      slack_acceptance: 0.01
+
+    transformer:
+      raw:
+        - name: Standardize
+        - name: RandomFlip
+        - name: RandomRotate90
+        - name: RandomRotate
+          # rotate in ZY plane only (x-axis is the anisotropic SAM scan axis)
+          axes: [ [ 2, 1 ] ]
+          angle_spectrum: 30
+          mode: reflect
+        - name: ElasticDeformation
+          spline_order: 3
+        - name: ToTensor
+          expand_dims: true
+      label:
+        - name: RandomFlip
+        - name: RandomRotate90
+        - name: RandomRotate
+          axes: [ [ 2, 1 ] ]
+          angle_spectrum: 30
+          mode: reflect
+        - name: ElasticDeformation
+          # nearest-neighbour interpolation preserves integer class indices
+          spline_order: 0
+        - name: ToTensor
+          expand_dims: false
+          dtype: int64
+
+  val:
+    file_paths:
+      - D:\Working\10. AI-Workspace\model\pytorch-3dunet\resources\dataset\val
+
+    slice_builder:
+      name: FilterSliceBuilder
+      patch_shape: [ 80, 170, 170 ]
+      stride_shape: [ 80, 170, 170 ]
+      threshold: 0.01
+      slack_acceptance: 0.01
+
+    transformer:
+      raw:
+        - name: Standardize
+        - name: ToTensor
+          expand_dims: true
+      label:
+        - name: ToTensor
+          expand_dims: false
+          dtype: int64

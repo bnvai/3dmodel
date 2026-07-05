@@ -1,0 +1,126 @@
+# 6-class training — ResidualAttentionUNet3D (f_maps=[32,64,128,256])
+#
+# Trains from scratch on the full 6-class dataset (adds solder vs CE Phase 1).
+# Architecture is smaller than proposed (f_maps=[64,128,256,512]) to reduce
+# overfitting and memory pressure.
+#
+# Improvements over CE Phase 1 (out_channels=5, no solder, no weights):
+#   1. out_channels=6     — includes solder class (7.17% of voxels)
+#   2. Class-weighted CE  — sqrt-inverse-freq weights, chip gets 26x vs background
+#      background 89% | base_cu 0.38% | circuit 0.94% | base_chip 2.39%
+#      chip 0.13%     | solder  7.17%
+#   3. dropout_prob=0.3   — CE Phase 1 train-val gap reached +0.12
+#   4. skip_background    — honest metric; background (89%) inflates raw IoU
+#   5. factor=0.5         — gentler LR reduction (CE Phase 1 used 0.2)
+#
+# Weights = sqrt(1/freq), normalized so sum=6:
+#   [0.10, 1.49, 0.94, 0.59, 2.54, 0.34]
+
+model:
+  name: ResidualAttentionUNet3D
+  in_channels: 1
+  out_channels: 6
+  layer_order: cge
+  f_maps: [ 32, 64, 128, 256 ]
+  num_groups: 8
+  final_sigmoid: false
+  is_segmentation: true
+  dropout_prob: 0.3
+
+trainer:
+  checkpoint_dir: D:\Working\10. AI-Workspace\model\pytorch-3dunet\resources\3DSemiconductor\checkpoints_proposed_ce_v2
+  resume: null
+  pre_trained: null
+  validate_after_iters: 1000
+  log_after_iters: 500
+  max_num_epochs: 200
+  max_num_iterations: 100000
+  eval_score_higher_is_better: true
+  early_stopping_patience: 20
+  max_val_images: 20
+
+loss:
+  name: CrossEntropyLoss
+  weight: [ 0.10, 1.49, 0.94, 0.59, 2.54, 0.34 ]
+
+optimizer:
+  learning_rate: 0.0001
+  weight_decay: 0.00001
+
+eval_metric:
+  name: MeanIoU
+  skip_background: true
+
+lr_scheduler:
+  name: ReduceLROnPlateau
+  mode: max
+  factor: 0.5
+  patience: 8
+
+loaders:
+  dataset: LazyHDF5Dataset
+  batch_size: 1
+  num_workers: 4
+  raw_internal_path: image
+  label_internal_path: label
+  random_scale: 10
+  random_scale_probability: 0.1
+  global_normalization: false
+
+  train:
+    file_paths:
+      - D:\Working\10. AI-Workspace\model\pytorch-3dunet\resources\dataset\train
+
+    slice_builder:
+      name: FilterSliceBuilder
+      patch_shape: [ 80, 170, 170 ]
+      stride_shape: [ 20, 20, 20 ]
+      threshold: 0.05
+      slack_acceptance: 0.01
+
+    transformer:
+      raw:
+        - name: Standardize
+        - name: RandomFlip
+        - name: RandomRotate90
+        - name: RandomRotate
+          axes: [ [ 2, 1 ] ]
+          angle_spectrum: 30
+          mode: reflect
+        - name: ElasticDeformation
+          spline_order: 3
+        - name: ToTensor
+          expand_dims: true
+      label:
+        - name: RandomFlip
+        - name: RandomRotate90
+        - name: RandomRotate
+          axes: [ [ 2, 1 ] ]
+          angle_spectrum: 30
+          mode: reflect
+        - name: ElasticDeformation
+          spline_order: 0
+        - name: ToTensor
+          expand_dims: false
+          dtype: int64
+
+  val:
+    file_paths:
+      - D:\Working\10. AI-Workspace\model\pytorch-3dunet\resources\dataset\val
+
+    slice_builder:
+      name: FilterSliceBuilder
+      patch_shape: [ 80, 170, 170 ]
+      stride_shape: [ 80, 170, 170 ]
+      threshold: 0.01
+      slack_acceptance: 0.01
+
+    transformer:
+      raw:
+        - name: Standardize
+        - name: ToTensor
+          expand_dims: true
+      label:
+        - name: ToTensor
+          expand_dims: false
+          dtype: int64

@@ -1,0 +1,22 @@
+name: 3dunet
+
+channels:
+  - conda-forge
+
+dependencies:
+  - python >=3.11
+  - numpy
+  - nomkl
+  - tensorboard
+  - tqdm
+  - setuptools
+  - h5py
+  - scipy
+  - scikit-image
+  - pyyaml
+  - pytest
+  - ruff
+  - pip
+  - pip:
+    - torch
+    - torchvision
